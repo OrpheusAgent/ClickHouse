@@ -43,7 +43,7 @@ namespace
                 return false;
 
             String maybe_new_name;
-            if (!parseUserName(pos, expected, maybe_new_name, /*allow_query_parameter=*/true))
+            if (!parseUserName(pos, expected, maybe_new_name, /*allow_query_parameter=*/false))
                 return false;
 
             new_name.emplace(std::move(maybe_new_name));
@@ -753,6 +753,9 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     query->reset_authentication_methods_to_new = reset_authentication_methods_to_new;
     query->add_identified_with = parsed_add_identified_with;
     query->replace_authentication_methods = parsed_identified_with;
+
+    if (query->names && query->names->hasQueryParameters())
+        query->children.push_back(query->names);
 
     for (const auto & authentication_method : query->authentication_methods)
     {
