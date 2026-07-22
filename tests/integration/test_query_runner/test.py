@@ -7,7 +7,7 @@ cluster = ClickHouseCluster(__file__)
 
 node_query_runner = cluster.add_instance(
     "node_query_runner",
-    main_configs=["configs/remote_servers.xml"],
+    main_configs=["configs/remote_servers.xml", "configs/silk.xml"],
 )
 node_cluster = cluster.add_instance(
     "node_cluster",
@@ -24,22 +24,30 @@ def started_cluster():
         cluster.shutdown()
 
 
-def runner_ddl(columns, mode, location):
+def runner_ddl(columns, mode, location, scheduler="threads"):
     cluster_setting = ", cluster = 'qr_cluster', shard = '1'" if location == "cluster" else ""
+    scheduler_setting = f", scheduler = '{scheduler}'" if scheduler != "threads" else ""
     return (
         f"CREATE OR REPLACE TABLE runner ({columns}) "
-        f"ENGINE = QueryRunner SETTINGS mode = '{mode}'{cluster_setting}"
+        f"ENGINE = QueryRunner SETTINGS mode = '{mode}'{cluster_setting}{scheduler_setting}"
     )
 
 
 @pytest.mark.parametrize("mode", ["synchronous", "asynchronous"])
-@pytest.mark.parametrize("location, node_target", [("local", node_query_runner), ("cluster", node_cluster)])
-def test_dispatching(mode, location, node_target):
-    fail_marker = f"qr_dispatch_fail_{mode}_{location}"
+@pytest.mark.parametrize(
+    "location, node_target, scheduler",
+    [
+        ("local", node_query_runner, "threads"),
+        ("cluster", node_cluster, "threads"),
+        ("cluster", node_cluster, "fibers"),
+    ],
+)
+def test_dispatching(mode, location, node_target, scheduler):
+    fail_marker = f"qr_dispatch_fail_{mode}_{location}_{scheduler}"
     node_target.query("CREATE OR REPLACE TABLE target (x UInt64) ENGINE = MergeTree ORDER BY tuple()")
     node_target.query("CREATE DATABASE IF NOT EXISTS routed")
     node_target.query("CREATE OR REPLACE TABLE routed.t (x UInt64) ENGINE = MergeTree ORDER BY tuple()")
-    node_query_runner.query(runner_ddl("query String, database String", mode, location))
+    node_query_runner.query(runner_ddl("query String, database String", mode, location, scheduler))
     node_query_runner.query(
         "INSERT INTO runner VALUES "
         f"('SELECT throwIf(1, ''{fail_marker}'')', ''), "
@@ -217,9 +225,16 @@ def test_definer_not_tracked_without_table_uuid():
     node_query_runner.query("DROP DATABASE qr_nil_db")
 
 
-def test_wait_query_runner():
-    node_query_runner.query("CREATE OR REPLACE TABLE target (x UInt64) ENGINE = MergeTree ORDER BY tuple()")
-    node_query_runner.query(runner_ddl("query String", "asynchronous", "local"))
+@pytest.mark.parametrize(
+    "location, node_target, scheduler",
+    [
+        ("local", node_query_runner, "threads"),
+        ("cluster", node_cluster, "fibers"),
+    ],
+)
+def test_wait_query_runner(location, node_target, scheduler):
+    node_target.query("CREATE OR REPLACE TABLE target (x UInt64) ENGINE = MergeTree ORDER BY tuple()")
+    node_query_runner.query(runner_ddl("query String", "asynchronous", location, scheduler))
     node_query_runner.query(
         "INSERT INTO runner VALUES "
         "('INSERT INTO default.target SELECT 1 + sleep(0.5)'), "
@@ -227,5 +242,5 @@ def test_wait_query_runner():
         "('INSERT INTO default.target SELECT 3 + sleep(0.5)')"
     )
     node_query_runner.query("SYSTEM WAIT QUERY RUNNER runner")
-    assert node_query_runner.query("SELECT x FROM target ORDER BY x") == "1\n2\n3\n"
+    assert node_target.query("SELECT x FROM target ORDER BY x") == "1\n2\n3\n"
     node_query_runner.query("DROP TABLE runner")

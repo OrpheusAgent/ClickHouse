@@ -20,7 +20,6 @@ namespace Silk
 
 /// We need larger stacks than the Silk library uses because
 /// OpenSSL handshakes run on fiber stacks and need more room than the silk default.
-/// TODO(mstetsyuk): track stacks memory in global memory tracker.
 inline constexpr uint32_t DEFAULT_FIBER_STACK_SIZE = 320 * 1024;
 
 void initializeFiberScheduler(uint32_t fiber_stack_size);
